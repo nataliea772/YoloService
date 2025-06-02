@@ -20,6 +20,9 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd YoloService
-            git pull origin feature/deploy-dev
+            git reset --hard
+            git clean -fd
+            git pull origin main
             source .venv/bin/activate
+            pip install -r requirements.txt
             sudo systemctl restart yolo-dev.service
