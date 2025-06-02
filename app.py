@@ -1,4 +1,6 @@
 from fastapi import FastAPI, UploadFile, File, HTTPException, Request
+import boto3
+import tempfile
 from fastapi.responses import FileResponse, Response
 from ultralytics import YOLO
 from PIL import Image
@@ -12,6 +14,9 @@ import torch
 torch.cuda.is_available = lambda: False
 
 app = FastAPI()
+
+s3 = boto3.client('s3')
+BUCKET_NAME = 'natalie-polybot-images'
 
 UPLOAD_DIR = "uploads/original"
 PREDICTED_DIR = "uploads/predicted"
@@ -75,27 +80,49 @@ def save_detection_object(prediction_uid, label, score, box):
             VALUES (?, ?, ?, ?)
         """, (prediction_uid, label, score, str(box)))
 
+from pydantic import BaseModel
+
+class S3ImageInput(BaseModel):
+    s3_key: str  # Example: "original/1234.jpg"
+
 @app.post("/predict")
-def predict(file: UploadFile = File(...)):
-    """
-    Predict objects in an image
-    """
-    ext = os.path.splitext(file.filename)[1]
+async def predict(request: Request, file: UploadFile = File(None)):
     uid = str(uuid.uuid4())
-    original_path = os.path.join(UPLOAD_DIR, uid + ext)
+
+    try:
+        content_type = request.headers.get("content-type", "")
+        if "application/json" in content_type:
+            data = await request.json()
+            image_name = data.get("image_name")
+
+            if not image_name:
+                raise HTTPException(status_code=400, detail="Missing 'image_name' in JSON body")
+
+            ext = os.path.splitext(image_name)[1]
+            local_path = os.path.join(UPLOAD_DIR, uid + ext)
+
+            s3.download_file(BUCKET_NAME, image_name, local_path)
+
+        elif file:
+            ext = os.path.splitext(file.filename)[1]
+            local_path = os.path.join(UPLOAD_DIR, uid + ext)
+
+            with open(local_path, "wb") as f:
+                f.write(await file.read())
+        else:
+            raise HTTPException(status_code=400, detail="No image provided")
+
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Error handling image input: {str(e)}")
+
+    # Predict
     predicted_path = os.path.join(PREDICTED_DIR, uid + ext)
+    results = model(local_path, device="cpu")
+    annotated_frame = results[0].plot()
+    Image.fromarray(annotated_frame).save(predicted_path)
 
-    with open(original_path, "wb") as f:
-        shutil.copyfileobj(file.file, f)
-
-    results = model(original_path, device="cpu")
-
-    annotated_frame = results[0].plot()  # NumPy image with boxes
-    annotated_image = Image.fromarray(annotated_frame)
-    annotated_image.save(predicted_path)
-
-    save_prediction_session(uid, original_path, predicted_path)
-    
+    # Save to DB
+    save_prediction_session(uid, local_path, predicted_path)
     detected_labels = []
     for box in results[0].boxes:
         label_idx = int(box.cls[0].item())
@@ -106,7 +133,7 @@ def predict(file: UploadFile = File(...)):
         detected_labels.append(label)
 
     return {
-        "prediction_uid": uid, 
+        "prediction_uid": uid,
         "detection_count": len(results[0].boxes),
         "labels": detected_labels
     }
