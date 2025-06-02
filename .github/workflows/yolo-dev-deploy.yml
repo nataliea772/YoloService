@@ -20,5 +20,6 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
             cd YoloService
-            git pull origin dev
-            ./deploy-dev.sh
+            git pull origin feature/deploy-dev
+            source .venv/bin/activate
+            sudo systemctl restart yolo-dev.service
