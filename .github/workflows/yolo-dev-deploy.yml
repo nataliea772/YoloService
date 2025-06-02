@@ -15,7 +15,7 @@ jobs:
       - name: Deploy to YOLO Dev Server
         uses: appleboy/ssh-action@v1.0.0
         with:
-          host: ${{ secrets.YOLO_DEV_HOST }}
+          host: ${{ secrets.DEV_YOLO_HOST }}
           username: ubuntu
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           script: |
